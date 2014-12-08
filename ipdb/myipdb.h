@@ -17,6 +17,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
+
 
 void init_shm(char*);
 void err_exit(char*);
@@ -27,4 +29,6 @@ void read_from(char*);
 void print_db(char*);
 void clear_db(char*);
 void save_db(char*, char*);
-void lock_table(char*, int lock);
+void load_db(char*, char*);
+void lock_table(char*, int);
+void lock_row(char*, char*, int);

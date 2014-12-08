@@ -26,9 +26,10 @@ int main(){
             print_db(shm_path);
         }
         else if(strstr(raw, "save")){
-            save_db(shm_path, &raw[6]);
+            save_db(shm_path, &raw[5]);
         }
         else if(strstr(raw, "load")){
+            load_db(shm_path, &raw[5]);
         }
         else if(strstr(raw, "clear")){
             if(shm_unlink(shm_path) == -1)
@@ -43,11 +44,14 @@ int main(){
         }
         else if(strstr(raw, "row")){
             if(strstr(raw, "unlock")){
+                lock_row(shm_path, &raw[11], 0);
             } else {
+                lock_row(shm_path, &raw[9], 1);
             }
         }
         else if(strstr(raw, "exit")){
             printf("Exiting...\n");
+            lock_table(shm_path, 2);
             if(shm_unlink(shm_path) == -1){
                 printf("Could not unlink memory\n");
                 exit(1);
@@ -95,7 +99,7 @@ int check_hostname(char* shm_path, char* hostname){
     char* addr;
     struct stat sb;
 
-    if((fd = shm_open(shm_path, O_RDONLY, 0)) == -1)
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
         err_exit("shm_open");
 
     if(fstat(fd, &sb) == -1)
@@ -106,7 +110,7 @@ int check_hostname(char* shm_path, char* hostname){
         return 0;
     }
 
-    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if(addr == MAP_FAILED)
         err_exit("mmap");
 
@@ -116,14 +120,18 @@ int check_hostname(char* shm_path, char* hostname){
     for(int i = 0; i<(sb.st_size/sizeof(ip_row_t)); i++){
         struct ip_row* row = (struct ip_row*)addr;
         if(strcmp(row->row_name, hostname) == 0){
-            //LOCK ROW
-            printf("%s %s %s\n", row->row_name, row->row_address4, row->row_address6);
+            if(sem_wait(&row->row_lock) == -1)
+                err_exit("sem_wait");
+            printf("%s IPV4: %s   IPV6: %s\n", row->row_name, row->row_address4, row->row_address6);
+            if(sem_post(&row->row_lock) == -1)
+                err_exit("sem_post");
             munmap(addr, sb.st_size);
             return 1; 
         }
         else
             addr += sizeof(ip_row_t);
     }
+    munmap(addr, sb.st_size);
     return 0;
 }
 
@@ -163,10 +171,9 @@ void add_row(char* shm_path, char* hostname){
             memcpy(new_row.row_address6, ipstr, NAME_SIZE);
         }
     }
-
-/*    int sval;
-    sem_getvalue(&(new_row.row_lock), &sval);
-    printf("%d\n", sval);*/
+    if(sem_init(&new_row.row_lock, 1, 1) == -1)
+        err_exit("sem_init");
+    printf("%s %s %s\n", new_row.row_name, new_row.row_address4, new_row.row_address6);
     write_to(shm_path, new_row);
     freeaddrinfo(res);
 }
@@ -175,12 +182,6 @@ void write_to(char* shm_path, struct ip_row message){
     int fd = 0;
     char* addr;
     struct stat sb;
-
-    printf("%p\n", &message.row_lock);
-    if(sem_init(&message.row_lock, 1, 1) == -1)
-        err_exit("sem_init");
-
-    printf("%s %s %s\n", message.row_name, message.row_address4, message.row_address6);
 
     if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
         err_exit("shm_open");
@@ -197,8 +198,9 @@ void write_to(char* shm_path, struct ip_row message){
 
     if(close(fd) == -1)
         err_exit("close");
-
+    //lock_table(shm_path, 1);
     memcpy(addr+sb.st_size, &message, sizeof(message));
+    //lock_table(shm_path, 0);
     munmap(addr, (size_t)sizeof(message)+sb.st_size);
 }
 
@@ -207,13 +209,13 @@ void print_db(char* shm_path){
     char* addr;
     struct stat sb;
 
-    if((fd = shm_open(shm_path, O_RDONLY, 0)) == -1)
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
         err_exit("shm_open");
 
     if(fstat(fd, &sb) == -1)
         err_exit("fstat");
 
-    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if(addr == MAP_FAILED)
         err_exit("mmap");
 
@@ -222,14 +224,11 @@ void print_db(char* shm_path){
 
     for(int i = 0; i<(sb.st_size/sizeof(ip_row_t)); i++){
         struct ip_row* row = (struct ip_row*)addr;
-        int sval;
-        sem_getvalue(&(row->row_lock), &sval);
-        printf("%d\n", sval);
-        printf("%p\n", &row->row_lock);
-        //if(sem_wait(&(row->row_lock)) == -1)
-        //    err_exit("sem_wait");
-        printf("%s %s %s\n", row->row_name, row->row_address4, row->row_address6);
-        //sem_post(&(row->row_lock));
+        if(sem_wait(&row->row_lock) == -1)
+            err_exit("sem_wait");
+        printf("%s IPV4: %s   IPV6: %s\n", row->row_name, row->row_address4, row->row_address6);
+        if(sem_post(&row->row_lock) == -1)
+            err_exit("sem_post");
         addr += sizeof(ip_row_t);
     }
     munmap(addr, (size_t)sb.st_size);
@@ -238,42 +237,80 @@ void print_db(char* shm_path){
 void save_db(char* shm_path, char* filename){
     int fd, file_fd, flags;
     char* addr;
-    char* fullpath = malloc(2048);
-    char current[1024];
     struct stat sb;
 
-    flags = O_CREAT | O_WRONLY;
+    flags = O_CREAT | O_RDWR;
 
-    if((fd = shm_open(shm_path, O_RDONLY, 0)) == -1)
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
         err_exit("shm_open");
 
     if(fstat(fd, &sb) == -1)
         err_exit("fstat");
 
-    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if(addr == MAP_FAILED)
         err_exit("mmap");
 
     if(close(fd) == -1)
         err_exit("close");
 
-    getcwd(current, 1024);
-    strcpy(fullpath, current);
-    strcat(fullpath, filename);
-
-    printf("%s\n", fullpath);
-    if((file_fd=open(fullpath, flags)) == -1)
+    if((file_fd=open(filename, flags, S_IRUSR | S_IWUSR)) == -1)
         err_exit("open"); 
 
     for(int i = 0; i<(sb.st_size/sizeof(ip_row_t)); i++){
         struct ip_row* row = (struct ip_row*)addr;
-        //LOCK SEMAPHORE
-        write(file_fd, row->row_name, NAME_SIZE);
-        write(file_fd, "\n",   1);
+        if(sem_wait(&row->row_lock) == -1)
+            err_exit("sem_wait");
+        write(file_fd, row->row_name, strlen(row->row_name));
+        write(file_fd, "\n", 1);
+        if(sem_post(&row->row_lock) == -1)
+            err_exit("sem_post");
+        addr += sizeof(ip_row_t);
     }
 
     if(close(file_fd) == -1)
         err_exit("close");
+    munmap(addr, sb.st_size);
+}
+
+void load_db(char* shm_path, char* filename){
+    int fd, count = 0;
+    char* addr;
+    char* line;
+    struct stat sb;
+    FILE* file;
+    size_t len = 0;
+    ssize_t read;
+
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
+        err_exit("shm_open");
+
+    if((file=fopen(filename, "r+")) == (FILE*)NULL)
+        perror("open");
+
+    while((read = getline(&line, &len, file)) > 0){
+        if(check_hostname(shm_path, line) == 0)
+            count++;
+    }
+
+    if(fstat(fd, &sb) == -1)
+        err_exit("fstat");
+
+    addr = mmap(NULL, (sb.st_size+(count*sizeof(struct ip_row))), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if(addr == MAP_FAILED)
+        err_exit("mmap");
+
+    if(close(fd) == -1)
+        err_exit("close");
+    if(fseek(file, 0, SEEK_SET) == -1)
+        err_exit("fseek");
+    while((read = getline(&line, &len, file)) > 0){
+        line[strlen(line)-1] = '\0';
+        if(check_hostname(shm_path, line) == 0)
+            add_row(shm_path, line);
+    }
+    fclose(file);
+    munmap(addr, count*sizeof(struct ip_row));
 }
 
 void lock_table(char* shm_path, int lock){
@@ -281,23 +318,66 @@ void lock_table(char* shm_path, int lock){
     char* addr;
     struct stat sb;
 
-    if((fd = shm_open(shm_path, O_RDONLY, 0)) == -1)
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
         err_exit("shm_open");
 
     if(fstat(fd, &sb) == -1)
         err_exit("fstat");
 
-    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if(addr == MAP_FAILED)
         err_exit("mmap");
 
     if(close(fd) == -1)
         err_exit("close");
-    
-/*    if(lock == 1)
-        mlock(addr, sb.st_size);
-    else
-        munlock(addr, sb.st_size);
-*/
+
+    for(int i = 0; i<(sb.st_size/sizeof(ip_row_t)); i++){
+        struct ip_row* row = (struct ip_row*)addr;
+        if(lock == 1){
+            if(sem_wait(&row->row_lock) == -1)
+                err_exit("sem_wait");
+        } else if(lock == 0){
+            if(sem_post(&row->row_lock) == -1)
+                err_exit("sem_post");
+        } else if(lock == 2){
+            if(sem_destroy(&row->row_lock) == -1)
+                err_exit("sem_destroy");
+        }
+        addr += sizeof(ip_row_t);
+    }
+    munmap(addr, sb.st_size);
 }
 
+void lock_row(char* shm_path, char* hostname, int lock){
+    int fd;
+    char* addr;
+    struct stat sb;
+
+    if((fd = shm_open(shm_path, O_RDWR, 0)) == -1)
+        err_exit("shm_open");
+
+    if(fstat(fd, &sb) == -1)
+        err_exit("fstat");
+
+    addr = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if(addr == MAP_FAILED)
+        err_exit("mmap");
+
+    if(close(fd) == -1)
+        err_exit("close");
+
+    for(int i = 0; i<(sb.st_size/sizeof(ip_row_t)); i++){
+        struct ip_row* row = (struct ip_row*)addr;
+        if(strcmp(row->row_name, hostname) == 0){
+            if(lock == 1){
+                if(sem_wait(&row->row_lock) == -1)
+                    perror("sem_wait");
+            } else {
+                if(sem_post(&row->row_lock) == -1)
+                    perror("sem_wait");
+            }
+        }
+        addr += sizeof(ip_row_t);
+    }
+    munmap(addr, sb.st_size);
+}
