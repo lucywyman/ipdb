@@ -1,3 +1,10 @@
+/********************
+** Lucy Wyman
+** wymanl@onid.oregonstate.edu
+** CS344-001
+** Assignment 4
+********************/
+
 #ifndef _SERVER_H_
 #define _SERVER_H_
 

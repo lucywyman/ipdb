@@ -1,7 +1,7 @@
 CC=clang
 CFLAGS= -Wall -std=c99 -pthread -g -lrt
 
-all: myipdb
+all: myipdb sockets
 
 myipdb: 
 	$(CC) $(CFLAGS) myipdb.c -o myipdb 

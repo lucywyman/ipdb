@@ -1,7 +1,11 @@
-// TODO fix exit function
-// TODO puts and gets
-// TODO Test multiple clients
-// TODO Extra credit?
+/********************
+** Lucy Wyman
+** wymanl@onid.oregonstate.edu
+** CS344-001
+** Assignment 4
+********************/
+
+
 #include "sockets.h"
 #include "client.h"
 
@@ -72,6 +76,10 @@ void create_client(int port, char* ip){
     while(fgets(buffer, BUFFER, stdin) > 0){
         if(buffer[0] == 'l' || strstr(buffer, "help")){
             parse(buffer);
+        } else if (strstr(buffer, "put")){
+            put(buffer, sock_fd);
+        } else if (strstr(buffer, "get")){
+            get(buffer, sock_fd);
         } else {
             if(write(sock_fd, buffer, BUFFER) == -1)
                 error_exit("write");
@@ -87,6 +95,50 @@ void create_client(int port, char* ip){
         printf("\n%s", PROMPT);
     }
     close(sock_fd);
+}
+
+void put(char* buffer, int sock_fd){
+    buffer[strlen(buffer)-1] = '\0';
+    int fd = open(&buffer[4], O_RDONLY);
+    struct stat sb;
+
+    if(fd == -1)
+        error_exit("open");
+
+    if(fstat(fd, &sb) == -1)
+        error_exit("fstat");
+    int filesize = (int) sb.st_size;
+    write(sock_fd, buffer, BUFFER);
+    write(sock_fd, &filesize, sizeof(int));
+
+    char* filebuffer = malloc(filesize);
+    if(read(fd, filebuffer, filesize) == -1)
+        error_exit("read");
+
+    if(write(sock_fd, filebuffer, filesize) == -1)
+        error_exit("write");
+    close(fd);
+    free(filebuffer);
+}
+
+void get(char* buffer, int sock_fd){
+    buffer[strlen(buffer)-1] = '\0';
+    int fd = open(&buffer[4], O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP);
+    int filesize;
+
+    write(sock_fd, buffer, BUFFER);
+
+    if(fd == -1)
+        error_exit("open");
+    if(read(sock_fd, &filesize, sizeof(int)) == -1)
+        error_exit("read");
+    char* filebuffer = malloc(filesize);
+    if(read(sock_fd, filebuffer, filesize) == -1)
+        error_exit("read");
+    write(fd, filebuffer, filesize);
+    printf("Created file");
+    free(filebuffer);
+    close(fd);
 }
 
 void parse(char* buffer){

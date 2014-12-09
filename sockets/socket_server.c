@@ -1,3 +1,11 @@
+/********************
+** Lucy Wyman
+** wymanl@onid.oregonstate.edu
+** CS344-001
+** Assignment 4
+********************/
+
+
 #include "sockets.h"
 #include "server.h"
 
@@ -69,13 +77,13 @@ void *baby_server(void* newsock_fd){
     char buffer[BUFFER];
     int sock_fd = (int) newsock_fd;
     char* help = "Sockets Client-Server\n\
-    cd -- Change to your home directory\n\
-    cd <directory> -- Change to a different directory\n\
-    pwd -- Print your current directory\n\
-    dir -- list all files in current directory (and other information about files\n\
-    put -- Send a file to the server\n\
-    get -- Get a file from the server\n\
-    exit -- Terminate the client process\n";
+                  cd -- Change to your home directory\n\
+                  cd <directory> -- Change to a different directory\n\
+                  pwd -- Print your current directory\n\
+                  dir -- list all files in current directory (and other information about files\n\
+                          put -- Send a file to the server\n\
+                          get -- Get a file from the server\n\
+                          exit -- Terminate the client process\n";
 
     memset(&buffer, '\0', BUFFER);
 
@@ -118,10 +126,37 @@ void *baby_server(void* newsock_fd){
             }
         }
         else if(strstr(buffer, "put")){
-            printf("Put");
+            int fd, filesize;
+            if((fd = open(&buffer[4], O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP)) == -1)
+                perror("open");
+            if(read(sock_fd, &filesize, sizeof(int))==-1)
+                error_exit("read");
+            char* filebuffer = malloc(filesize);
+            if((read(sock_fd, filebuffer, filesize)) == -1)
+                error_exit("read");
+            write(fd, filebuffer, filesize);
+            char* finished = "Created file"; 
+            write(sock_fd, finished, strlen(finished));
+            free(filebuffer);
+            close(fd);
         }
         else if(strstr(buffer, "get")){
-            printf("get");
+            int fd, filesize;
+            struct stat sb;
+            if((fd = open(&buffer[4], O_RDONLY)) == -1)
+                perror("open");
+            if(fstat(fd, &sb) == -1)
+                error_exit("fstat");
+            filesize = (int) sb.st_size;
+            write(sock_fd, &filesize, sizeof(int));
+
+            char* filebuffer = malloc(filesize);
+            if(read(fd, filebuffer, filesize) == -1)
+                error_exit("read");
+            if(write(sock_fd, filebuffer, filesize) == -1)
+                error_exit("write");
+            close(fd);
+            free(filebuffer);
         }
         else if(strstr(buffer, "exit")){
             char* term = "Terminating connection...\n";
